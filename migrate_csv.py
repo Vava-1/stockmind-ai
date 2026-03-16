@@ -1,111 +1,111 @@
-import csv
 import os
+import csv
 import psycopg2
 from dotenv import load_dotenv
 
-# Load your secure .env variables
+# --- 1. Load the Live Database Connection ---
 load_dotenv()
+DB_URL = os.getenv("DATABASE_URL") 
+CSV_FILE_PATH = "giva_tech_inventory_master.csv" 
 
 def migrate_data():
-    print("Starting data migration...")
+    if not DB_URL:
+        print("🚨 CRITICAL: DATABASE_URL is missing from your .env file!")
+        return
+
+    if not os.path.exists(CSV_FILE_PATH):
+        print(f"🚨 ERROR: Could not find '{CSV_FILE_PATH}' on your laptop.")
+        return
+
+    print("🔌 Establishing secure connection to Railway Cloud Database...")
+    conn = None
+    cursor = None
     
-    # 1. Connect to PostgreSQL
     try:
-        conn = psycopg2.connect(
-            dbname="stockmind_db",               
-            user=os.getenv("DB_USER", "postgres"),
-            password="VavusDei2004",  # <--- Make sure your actual password is here!
-            host=os.getenv("DB_HOST", "localhost"),
-            port=os.getenv("DB_PORT", "5432")
-        )
-        cur = conn.cursor()
-        print("Connected to PostgreSQL successfully.")
-    except Exception as e:
-        print(f"Database connection failed: {e}")
-        return
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
 
-    # CREATE THE TABLE IF IT DOES NOT EXIST
-    print("Ensuring database table exists...")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS inventory_master (
-            product_id VARCHAR(50) PRIMARY KEY,
-            product_category VARCHAR(100),
-            current_stock INTEGER,
-            supplier_cost_usd DECIMAL(10, 2),
-            lead_time_days INTEGER,
-            daily_sales_velocity DECIMAL(10, 2),
-            supplier_name VARCHAR(100),
-            market_trend_score INTEGER,
-            retail_price_usd DECIMAL(10, 2)
-        );
-    """)
-    
-    # CREATE THE SALES LEDGER TABLE FOR THE AI
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sales_ledger (
-            transaction_id SERIAL PRIMARY KEY,
-            product_id VARCHAR(50),
-            qty_sold INTEGER,
-            sale_price_usd DECIMAL(10, 2),
-            total_revenue_usd DECIMAL(10, 2) GENERATED ALWAYS AS (qty_sold * sale_price_usd) STORED,
-            transaction_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-
-    # 2. Read the CSV file
-    csv_file_path = "giva_tech_inventory_master.csv" 
-    
-    if not os.path.exists(csv_file_path):
-        print(f"Error: Could not find '{csv_file_path}'. Make sure it is in the same folder as this script.")
-        return
-
-    success_count = 0
-    error_count = 0
-
-    print("Reading CSV and injecting into the database...")
-    
-    with open(csv_file_path, mode='r', encoding='utf-8-sig') as file:
-        reader = csv.DictReader(file)
-        
-        for raw_row in reader:
-            # BULLETPROOF TRICK: Make all column names lowercase and strip hidden spaces
-            row = {str(k).strip().lower(): v for k, v in raw_row.items()}
+        print("🛡️ Verifying master database schema...")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inventory_master (
+                product_id VARCHAR(50) PRIMARY KEY,
+                product_name VARCHAR(255),
+                product_category VARCHAR(100),
+                current_stock INT DEFAULT 0,
+                unit_price NUMERIC(10, 2),
+                supplier_name VARCHAR(255),
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             
-            try:
-                # 3. Insert each row into the database
-                cur.execute("""
-                    INSERT INTO inventory_master (
-                        product_id, product_category, current_stock, 
-                        supplier_cost_usd, lead_time_days, daily_sales_velocity, 
-                        supplier_name, market_trend_score, retail_price_usd
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (product_id) DO NOTHING;
-                """, (
-                    row['product_id'], 
-                    row['product_category'], 
-                    int(float(row['current_stock'])), 
-                    float(row['supplier_cost_usd']), 
-                    int(float(row['lead_time_days'])), 
-                    float(row['daily_sales_velocity']), 
-                    row['supplier_name'], 
-                    int(float(row['market_trend_score'])), 
-                    float(row['retail_price_usd'])
-                ))
+            CREATE TABLE IF NOT EXISTS sales_ledger (
+                sale_id SERIAL PRIMARY KEY,
+                product_id VARCHAR(50) REFERENCES inventory_master(product_id),
+                qty_sold INT NOT NULL,
+                sale_price_usd NUMERIC(10, 2) NOT NULL,
+                sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+
+        print(f"📂 Reading 5,000+ item telemetry from {CSV_FILE_PATH}...")
+        
+        with open(CSV_FILE_PATH, mode='r', encoding='utf-8-sig') as file:
+            csv_reader = csv.DictReader(file)
+            
+            success_count = 0
+            for row in csv_reader:
+                # --- ENTERPRISE MAPPING ENGINE ---
+                # Matches the exact capital letters from your dataset
+                product_id = row.get('Product_ID')
+                if not product_id or str(product_id).strip() == "":
+                    continue
+                
+                # Auto-generate a cool product name since your CSV doesn't have one
+                category = row.get('Product_Category', 'Tech Hardware').strip()
+                item_number = product_id.split('-')[-1] if '-' in product_id else "000"
+                generated_name = f"GIVA {category} Series-{item_number}"
+                
+                # Safely pull the exact columns from your data
+                raw_stock = row.get('Current_Stock', 0)
+                safe_stock = int(raw_stock) if raw_stock and str(raw_stock).strip() else 0
+                
+                raw_price = row.get('Retail_Price_USD', 0.0)
+                safe_price = float(raw_price) if raw_price and str(raw_price).strip() else 0.0
+                
+                supplier = row.get('Supplier_Name', 'Unknown').strip()
+
+                # Upsert into Database
+                cursor.execute("""
+                    INSERT INTO inventory_master 
+                        (product_id, product_name, product_category, current_stock, unit_price, supplier_name)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (product_id) 
+                    DO UPDATE SET 
+                        product_name = EXCLUDED.product_name,
+                        current_stock = EXCLUDED.current_stock,
+                        unit_price = EXCLUDED.unit_price,
+                        supplier_name = EXCLUDED.supplier_name,
+                        last_updated = CURRENT_TIMESTAMP;
+                """, (product_id, generated_name, category, safe_stock, safe_price, supplier))
+                
                 success_count += 1
-            except Exception as e:
-                print(f"Error inserting {row.get('product_id', 'Unknown')}: {e}")
-                error_count += 1
-                conn.rollback() # Reset transaction state if one row fails
-            else:
-                conn.commit()
+                # Print a progress update every 1000 items so you know it's working
+                if success_count % 1000 == 0:
+                    print(f"⏳ Processed {success_count} items...")
 
-    print(f"\n✅ Migration complete! Successfully inserted {success_count} products.")
-    if error_count > 0:
-        print(f"⚠️ Failed to insert {error_count} products.")
+        conn.commit()
+        print(f"✅ BINGO! Successfully teleported {success_count} products into the Railway Cloud!")
 
-    cur.close()
-    conn.close()
+    except Exception as e:
+        print(f"❌ Migration sequence failed: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 if __name__ == "__main__":
+    print("🚀 Initiating Massive Enterprise Data Migration...")
     migrate_data()
