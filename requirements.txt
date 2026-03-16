@@ -6,3 +6,5 @@ pydantic
 google-generativeai
 groq
 python-dotenv
+streamlit
+requests
