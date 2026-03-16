@@ -3,7 +3,7 @@ uvicorn
 psycopg2-binary
 schedule
 pydantic
-google-generativeai
+google-genai
 groq
 python-dotenv
 streamlit
