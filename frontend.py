@@ -103,7 +103,7 @@ if prompt := st.chat_input("Message StockMind AI (e.g., 'Analyze market trends f
                 # Send the command and the full chat history to your FastAPI backend
                 payload = {"query": prompt, "history": current_chat["messages"]}
                 # NOTE: This assumes your main.py has an endpoint named /chat
-                response = requests.post("http://localhost:8000/chat", json=payload)
+               response = requests.post("https://stockmind-ai-production.up.railway.app/chat", json=payload)
                 
                 if response.status_code == 200:
                     ai_reply = response.json().get("reply", "No response received.")
