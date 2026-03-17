@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -125,7 +126,15 @@ async def health_check():
         'database': 'connected' if get_db_connection() else 'disconnected',
         'timestamp': datetime.now().isoformat()
     }
-
+@app.get('/', response_class=HTMLResponse)
+async def serve_ui():
+    """Serves the gorgeous Gemini-style frontend UI directly from the backend."""
+    try:
+        with open("index.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"Failed to load UI: {e}")
+        return "<h1>UI currently offline. Backend engine is running.</h1>"
 @app.get('/inventory')
 async def get_inventory():
     data = load_inventory_from_db()
